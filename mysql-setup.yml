@@ -1,0 +1,88 @@
+---
+# mysql_setup.yml - Configuración de MySQL en la VM
+- name: Configure MySQL Server
+  hosts: mysql
+  become: yes
+  vars:
+    mysql_root_password: "{{ lookup('env', 'MYSQL_ROOT_PASSWORD') | default('StrongRootPassword!', true) }}"
+    mysql_user: "{{ lookup('env', 'MYSQL_USER') | default('admin', true) }}"
+    mysql_password: "{{ lookup('env', 'MYSQL_PASSWORD') | default('P@ssw0rd123!', true) }}"
+    mysql_database: "{{ lookup('env', 'MYSQL_DATABASE') | default('testdb', true) }}"
+    app_subnet_cidr: "10.0.2.0/24"  # Debe coincidir con la subred de App Service
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - mysql-server
+          - python3-pip
+          - python3-mysqldb
+        state: present
+
+    - name: Start and enable MySQL service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Set MySQL root password
+      mysql_user:
+        name: root
+        password: "{{ mysql_root_password }}"
+        host: localhost
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+
+    - name: Create MySQL configuration file
+      template:
+        src: templates/my.cnf.j2
+        dest: /etc/mysql/mysql.conf.d/mysqld.cnf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart MySQL
+
+    - name: Create MySQL database
+      mysql_db:
+        name: "{{ mysql_database }}"
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Create MySQL user
+      mysql_user:
+        name: "{{ mysql_user }}"
+        password: "{{ mysql_password }}"
+        priv: "{{ mysql_database }}.*:ALL"
+        host: '%'
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Create tutorials table
+      mysql_query:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        db: "{{ mysql_database }}"
+        query: |
+          CREATE TABLE IF NOT EXISTS tutorials (
+            id int(11) NOT NULL PRIMARY KEY AUTO_INCREMENT,
+            title varchar(255) NOT NULL,
+            description varchar(255),
+            published BOOLEAN DEFAULT false
+          );
+
+    - name: Configure MySQL to accept remote connections
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+      notify: Restart MySQL
+
+  handlers:
+    - name: Restart MySQL
+      service:
+        name: mysql
+        state: restarted
